@@ -1,0 +1,14 @@
+{
+  "name": "live-scores-bot",
+  "version": "1.0.0",
+  "description": "بوت نتائج كرة القدم اللحظية",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5"
+  }
+}
