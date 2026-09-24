@@ -6,7 +6,7 @@ dotenv.config();
 
 // --- سيرفر وهمي لإرضاء Railway ---
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + FotMob) is Active ⚽')).listen(PORT, () => {
+http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + SofaScore) is Active ⚽')).listen(PORT, () => {
   console.log(`🌐 سيرفر البوت الهجين يعمل بنجاح على بورت ${PORT}`);
 });
 
@@ -25,9 +25,8 @@ const VIP_CLUB_TEAMS = [
 ];
 
 // ==========================================
-// 2. إعدادات محرك المنتخبات (FotMob الخفي)
+// 2. إعدادات محرك المنتخبات (SofaScore الداخلي)
 // ==========================================
-// لا نحتاج لأي مفاتيح API هنا!
 const VIP_NATIONAL_TEAMS = [
   'Egypt', 'England', 'Portugal', 'Spain', 'Germany', 
   'Brazil', 'France', 'Italy', 'Netherlands'
@@ -78,60 +77,59 @@ async function checkClubs() {
 
     processMatches(targetMatches, 'club');
   } catch (error) {
-    // خطأ صامت لعدم إزعاج اللوج
+    // تجاهل الأخطاء الصامتة لمحرك الأندية
   }
 }
 
 // ==========================================
-// دالة تشغيل محرك المنتخبات الشبح (FotMob)
+// دالة تشغيل محرك المنتخبات (SofaScore الداخلي)
 // ==========================================
 async function checkNational() {
   try {
-    // تجهيز تاريخ اليوم بصيغة YYYYMMDD لسيرفر FotMob
+    // تجهيز التاريخ بصيغة YYYY-MM-DD لسيرفر SofaScore
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${year}${month}${day}`;
+    const dateStr = `${year}-${month}-${day}`;
 
-    const response = await axios.get(`https://www.fotmob.com/api/matches?date=${dateStr}`, {
+    const response = await axios.get(`https://api.sofascore.com/api/v1/sport/football/scheduled-events/${dateStr}`, {
       headers: { 
-        // قناع تنكري (Spoofing) لإقناع السيرفر أننا متصفح كروم حقيقي وليس بوت
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://www.sofascore.com',
+        'Referer': 'https://www.sofascore.com/',
+        'Accept': '*/*',
+        'Cache-Control': 'no-cache'
       },
       timeout: 8000
     });
 
-    const leagues = response.data.leagues || [];
+    const events = response.data.events || [];
     let targetMatches = [];
 
-    leagues.forEach(league => {
-      const matches = league.matches || [];
-      matches.forEach(match => {
-        const h = (match.home?.name || '').toLowerCase();
-        const a = (match.away?.name || '').toLowerCase();
+    events.forEach(match => {
+      const h = (match.homeTeam?.name || '').toLowerCase();
+      const a = (match.awayTeam?.name || '').toLowerCase();
 
-        // 1. فلترة الأرجنتين
-        const isBanned = BANNED_TEAMS_NAMES.some(b => h.includes(b.toLowerCase()) || a.includes(b.toLowerCase()));
-        if (isBanned) return;
+      // 1. فلترة الأرجنتين
+      const isBanned = BANNED_TEAMS_NAMES.some(b => h.includes(b.toLowerCase()) || a.includes(b.toLowerCase()));
+      if (isBanned) return;
 
-        // 2. فلترة المنتخبات المفضلة
-        const isVip = VIP_NATIONAL_TEAMS.some(v => h.includes(v.toLowerCase()) || a.includes(v.toLowerCase()));
-        
-        // 3. التأكد أن المباراة بدأت ولم تُلغى
-        const isStarted = match.status?.started;
-        const isCancelled = match.status?.cancelled;
+      // 2. فلترة المنتخبات المفضلة
+      const isVip = VIP_NATIONAL_TEAMS.some(v => h.includes(v.toLowerCase()) || a.includes(v.toLowerCase()));
+      
+      // 3. التأكد من حالة المباراة في SofaScore
+      const statusType = match.status?.type; // 'notstarted', 'inprogress', 'finished'
 
-        if (isVip && isStarted && !isCancelled) {
-          targetMatches.push(match);
-        }
-      });
+      if (isVip && (statusType === 'inprogress' || statusType === 'finished')) {
+        targetMatches.push(match);
+      }
     });
 
     processMatches(targetMatches, 'national');
   } catch (error) {
-    console.error('❌ خطأ في محرك FotMob للمنتخبات:', error.message);
+    const errorMsg = error.response?.status ? `Status ${error.response.status}` : error.message;
+    console.error(`❌ خطأ في محرك SofaScore للمنتخبات: ${errorMsg}`);
   }
 }
 
@@ -142,7 +140,6 @@ function processMatches(matches, type) {
   matches.forEach(match => {
     let matchId, homeTeam, awayTeam, homeGoals, awayGoals, status, minute;
 
-    // توحيد البيانات بناءً على مصدرها
     if (type === 'club') {
       matchId = `FD_${match.id}`;
       homeTeam = match.homeTeam.shortName || match.homeTeam.name;
@@ -152,16 +149,19 @@ function processMatches(matches, type) {
       status = match.status;
       minute = match.minute ? `${match.minute}'` : (status === 'PAUSED' ? 'HT' : '');
     } else if (type === 'national') {
-      matchId = `FM_${match.id}`;
-      homeTeam = match.home?.name;
-      awayTeam = match.away?.name;
-      homeGoals = match.home?.score ?? 0;
-      awayGoals = match.away?.score ?? 0;
+      matchId = `SS_${match.id}`;
+      homeTeam = match.homeTeam?.name;
+      awayTeam = match.awayTeam?.name;
+      homeGoals = match.homeScore?.current ?? 0;
+      awayGoals = match.awayScore?.current ?? 0;
       
-      const finished = match.status?.finished;
-      status = finished ? 'FINISHED' : 'IN_PLAY';
-      // التقاط الدقيقة أو حالة الشوطين من FotMob
-      minute = match.status?.liveTime?.short || match.status?.reason?.short || '';
+      const typeStatus = match.status?.type;
+      status = typeStatus === 'finished' ? 'FINISHED' : (typeStatus === 'inprogress' ? 'IN_PLAY' : typeStatus);
+      
+      // جلب الدقيقة، وإضافة علامة ' إذا كانت رقماً فقط
+      let minDesc = match.status?.description || '';
+      if (minDesc && !isNaN(minDesc)) minDesc += "'";
+      minute = minDesc;
     }
 
     const currentScore = `${homeGoals}-${awayGoals}`;
@@ -201,6 +201,6 @@ async function runEngines() {
   await checkNational();
 }
 
-console.log(`[${new Date().toLocaleTimeString()}] 🚀 تم تشغيل البوت الشبح (Football-Data + FotMob)...`);
+console.log(`[${new Date().toLocaleTimeString()}] 🚀 تم تشغيل البوت الشبح (Football-Data + SofaScore)...`);
 runEngines(); 
-setInterval(runEngines, 60000); // يفحص كل دقيقة بهدوء
+setInterval(runEngines, 60000);
