@@ -4,40 +4,22 @@ import http from 'http';
 
 dotenv.config();
 
-// --- سيرفر وهمي لإرضاء Railway ---
+// --- سيرفر وهمي ---
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + ESPN) is Active ⚽')).listen(PORT, () => {
+http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + ESPN) is 100% Bulletproof ⚽')).listen(PORT, () => {
   console.log(`🌐 سيرفر البوت الهجين يعمل بنجاح على بورت ${PORT}`);
 });
 
-// --- إعدادات التليجرام ---
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// ==========================================
-// 1. إعدادات محرك الأندية (Football-Data الرسمي)
-// ==========================================
 const FD_API_KEY = process.env.FD_API_KEY; 
-const VIP_CLUB_TEAMS = [
-  'Real Madrid', 'Barcelona', 'Atletico', 
-  'Manchester City', 'Liverpool', 'Arsenal', 'Chelsea', 'Manchester United', 
-  'Bayern', 'Paris', 'Juventus', 'Inter', 'Milan', 'Napoli'
-];
-
-// ==========================================
-// 2. إعدادات محرك المنتخبات (ESPN المفتوح)
-// ==========================================
-const VIP_NATIONAL_TEAMS = [
-  'Egypt', 'England', 'Portugal', 'Spain', 'Germany', 
-  'Brazil', 'France', 'Italy', 'Netherlands'
-];
-
-// ==========================================
-// القائمة السوداء الموحدة
-// ==========================================
+const VIP_CLUB_TEAMS = ['Real Madrid', 'Barcelona', 'Atletico', 'Manchester City', 'Liverpool', 'Arsenal', 'Chelsea', 'Manchester United', 'Bayern', 'Paris', 'Juventus', 'Inter', 'Milan', 'Napoli'];
+const VIP_NATIONAL_TEAMS = ['Egypt', 'England', 'Portugal', 'Spain', 'Germany', 'Brazil', 'France', 'Italy', 'Netherlands'];
 const BANNED_TEAMS_NAMES = ['Argentina'];
 
-const trackedMatches = {};
+// الذاكرة (تمت إضافة وقت التخزين لتنظيفها لاحقاً)
+let trackedMatches = {};
 
 async function sendTelegramMessage(text) {
   if (!BOT_TOKEN || !CHAT_ID) return;
@@ -53,7 +35,7 @@ async function sendTelegramMessage(text) {
 }
 
 // ==========================================
-// دالة تشغيل محرك الأندية (Football-Data)
+// محرك الأندية
 // ==========================================
 async function checkClubs() {
   if (!FD_API_KEY) return;
@@ -63,7 +45,7 @@ async function checkClubs() {
       timeout: 8000
     });
     
-    const matches = response.data.matches || [];
+    const matches = response.data?.matches || [];
     const targetMatches = matches.filter(match => {
       const h = (match.homeTeam?.name || '').toLowerCase();
       const a = (match.awayTeam?.name || '').toLowerCase();
@@ -77,48 +59,48 @@ async function checkClubs() {
 
     processMatches(targetMatches, 'club');
   } catch (error) {
-    // تجاهل الأخطاء الصامتة
+    if(error.response?.status === 429 || error.response?.status === 403) {
+       console.error(`⚠️ تحذير في محرك الأندية: تأكد من صلاحية أو باقة مفتاح FD_API_KEY`);
+    }
   }
 }
 
 // ==========================================
-// دالة تشغيل محرك المنتخبات (ESPN الداخلي)
+// محرك المنتخبات (ESPN)
 // ==========================================
 async function checkNational() {
   try {
-    // تجهيز التاريخ بصيغة YYYYMMDD لسيرفر ESPN
-    const now = new Date();
+    // 1. إصلاح فارق التوقيت: إجبار السيرفر على جلب تاريخ اليوم بتوقيت مصر
+    const egyptTime = new Date().toLocaleString("en-US", {timeZone: "Africa/Cairo"});
+    const now = new Date(egyptTime);
+    
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
     const dateStr = `${year}${month}${day}`;
 
-    // رابط ESPN السري للنتائج الحية لكل مباريات كرة القدم اليوم
     const response = await axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${dateStr}`, {
       timeout: 8000
     });
 
-    const events = response.data.events || [];
+    const events = response.data?.events || [];
     let targetMatches = [];
 
     events.forEach(match => {
-      const competition = match.competitions[0];
+      // 2. الحماية من الانهيار باستخدام Optional Chaining (?.)
+      const competition = match?.competitions?.[0];
       if (!competition) return;
 
-      const homeTeamData = competition.competitors.find(c => c.homeAway === 'home');
-      const awayTeamData = competition.competitors.find(c => c.homeAway === 'away');
+      const homeTeamData = competition?.competitors?.find(c => c.homeAway === 'home');
+      const awayTeamData = competition?.competitors?.find(c => c.homeAway === 'away');
 
       const h = (homeTeamData?.team?.name || '').toLowerCase();
       const a = (awayTeamData?.team?.name || '').toLowerCase();
 
-      // 1. فلترة الأرجنتين
       const isBanned = BANNED_TEAMS_NAMES.some(b => h.includes(b.toLowerCase()) || a.includes(b.toLowerCase()));
       if (isBanned) return;
 
-      // 2. فلترة المنتخبات المفضلة
       const isVip = VIP_NATIONAL_TEAMS.some(v => h.includes(v.toLowerCase()) || a.includes(v.toLowerCase()));
-      
-      // 3. التأكد من حالة المباراة في ESPN ('pre', 'in', 'post')
       const state = match.status?.type?.state; 
 
       if (isVip && (state === 'in' || state === 'post')) {
@@ -136,29 +118,31 @@ async function checkNational() {
 
     processMatches(targetMatches, 'national');
   } catch (error) {
-    console.error(`❌ خطأ في محرك ESPN للمنتخبات:`, error.message);
+    console.error(`❌ خطأ في محرك ESPN:`, error.message);
   }
 }
 
 // ==========================================
-// دالة معالجة الأهداف الموحدة للمحركين
+// معالجة الأهداف
 // ==========================================
 function processMatches(matches, type) {
+  const timestamp = Date.now(); // لغرض تنظيف الذاكرة لاحقاً
+  
   matches.forEach(match => {
     let matchId, homeTeam, awayTeam, homeGoals, awayGoals, status, minute;
 
     if (type === 'club') {
       matchId = `FD_${match.id}`;
-      homeTeam = match.homeTeam.shortName || match.homeTeam.name;
-      awayTeam = match.awayTeam.shortName || match.awayTeam.name;
+      homeTeam = match.homeTeam?.shortName || match.homeTeam?.name || 'Unknown';
+      awayTeam = match.awayTeam?.shortName || match.awayTeam?.name || 'Unknown';
       homeGoals = match.score?.fullTime?.home ?? 0;
       awayGoals = match.score?.fullTime?.away ?? 0;
       status = match.status;
       minute = match.minute ? `${match.minute}'` : (status === 'PAUSED' ? 'HT' : '');
     } else if (type === 'national') {
       matchId = `ESPN_${match.id}`;
-      homeTeam = match.homeTeam;
-      awayTeam = match.awayTeam;
+      homeTeam = match.homeTeam || 'Unknown';
+      awayTeam = match.awayTeam || 'Unknown';
       homeGoals = match.homeGoals ?? 0;
       awayGoals = match.awayGoals ?? 0;
       status = match.state === 'post' ? 'FINISHED' : 'IN_PLAY';
@@ -169,7 +153,7 @@ function processMatches(matches, type) {
     const isLive = status !== 'FINISHED';
 
     if (!trackedMatches[matchId]) {
-      trackedMatches[matchId] = { score: currentScore, status: status };
+      trackedMatches[matchId] = { score: currentScore, status: status, lastUpdated: timestamp };
       
       if (isLive && homeGoals === 0 && awayGoals === 0) {
         sendTelegramMessage(`🏁 <b>بداية المباراة!</b>\n\n🏆 <b>${homeTeam} vs ${awayTeam}</b>\n\nمشاهدة ممتعة 🍿`);
@@ -191,17 +175,38 @@ function processMatches(matches, type) {
         console.log(`[${type}] نهاية المباراة: ${homeTeam} ضد ${awayTeam}`);
       }
 
-      trackedMatches[matchId] = { score: currentScore, status: status };
+      // تحديث البيانات والوقت
+      trackedMatches[matchId] = { score: currentScore, status: status, lastUpdated: timestamp };
     }
   });
 }
 
-// تشغيل المحركين معاً
+// ==========================================
+// 4. تنظيف الذاكرة (Memory Cleanup) كل 24 ساعة
+// ==========================================
+setInterval(() => {
+  const now = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  Object.keys(trackedMatches).forEach(key => {
+    // لو الماتش عدى عليه 24 ساعة، امسحه من الرامات
+    if (now - trackedMatches[key].lastUpdated > ONE_DAY) {
+      delete trackedMatches[key];
+    }
+  });
+  console.log('🧹 تم تنظيف ذاكرة البوت من المباريات القديمة.');
+}, 24 * 60 * 60 * 1000); // يفحص كل 24 ساعة
+
+// ==========================================
+// 3. التنفيذ المتوازي للمحركات (Concurrency)
+// ==========================================
 async function runEngines() {
-  await checkClubs();
-  await checkNational();
+  // Promise.allSettled يضمن تشغيلهم معاً، وحتى لو واحد فشل التاني يكمل شغل عادي
+  await Promise.allSettled([
+    checkClubs(),
+    checkNational()
+  ]);
 }
 
-console.log(`[${new Date().toLocaleTimeString()}] 🚀 تم تشغيل البوت الشبح (Football-Data + ESPN)...`);
+console.log(`[${new Date().toLocaleTimeString('en-US', {timeZone: 'Africa/Cairo'})}] 🚀 تم تشغيل البوت الشبح المُحصّن...`);
 runEngines(); 
 setInterval(runEngines, 60000);
