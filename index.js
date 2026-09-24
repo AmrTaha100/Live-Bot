@@ -6,7 +6,7 @@ dotenv.config();
 
 // --- سيرفر وهمي ---
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + ESPN) is 100% Bulletproof ⚽')).listen(PORT, () => {
+http.createServer((req, res) => res.end('Hybrid Ghost Bot (VAR Edition) is Active ⚽')).listen(PORT, () => {
   console.log(`🌐 سيرفر البوت الهجين يعمل بنجاح على بورت ${PORT}`);
 });
 
@@ -18,7 +18,6 @@ const VIP_CLUB_TEAMS = ['Real Madrid', 'Barcelona', 'Atletico', 'Manchester City
 const VIP_NATIONAL_TEAMS = ['Egypt', 'England', 'Portugal', 'Spain', 'Germany', 'Brazil', 'France', 'Italy', 'Netherlands'];
 const BANNED_TEAMS_NAMES = ['Argentina'];
 
-// الذاكرة (تمت إضافة وقت التخزين لتنظيفها لاحقاً)
 let trackedMatches = {};
 
 async function sendTelegramMessage(text) {
@@ -70,7 +69,6 @@ async function checkClubs() {
 // ==========================================
 async function checkNational() {
   try {
-    // 1. إصلاح فارق التوقيت: إجبار السيرفر على جلب تاريخ اليوم بتوقيت مصر
     const egyptTime = new Date().toLocaleString("en-US", {timeZone: "Africa/Cairo"});
     const now = new Date(egyptTime);
     
@@ -87,7 +85,6 @@ async function checkNational() {
     let targetMatches = [];
 
     events.forEach(match => {
-      // 2. الحماية من الانهيار باستخدام Optional Chaining (?.)
       const competition = match?.competitions?.[0];
       if (!competition) return;
 
@@ -123,13 +120,13 @@ async function checkNational() {
 }
 
 // ==========================================
-// معالجة الأهداف
+// معالجة الأهداف (تحديث الـ VAR والهداف)
 // ==========================================
 function processMatches(matches, type) {
-  const timestamp = Date.now(); // لغرض تنظيف الذاكرة لاحقاً
+  const timestamp = Date.now(); 
   
   matches.forEach(match => {
-    let matchId, homeTeam, awayTeam, homeGoals, awayGoals, status, minute;
+    let matchId, homeTeam, awayTeam, homeGoals, awayGoals, status, minute, scorerStr = '';
 
     if (type === 'club') {
       matchId = `FD_${match.id}`;
@@ -139,74 +136,80 @@ function processMatches(matches, type) {
       awayGoals = match.score?.fullTime?.away ?? 0;
       status = match.status;
       minute = match.minute ? `${match.minute}'` : (status === 'PAUSED' ? 'HT' : '');
+      
+      // محاولة اصطياد اسم الهداف
+      if (match.goals && match.goals.length > 0) {
+        const lastGoal = match.goals[match.goals.length - 1];
+        if (lastGoal.scorer?.name) {
+          scorerStr = `\n👟 بواسطة: <b>${lastGoal.scorer.name}</b>`;
+        }
+      }
     } else if (type === 'national') {
       matchId = `ESPN_${match.id}`;
       homeTeam = match.homeTeam || 'Unknown';
       awayTeam = match.awayTeam || 'Unknown';
-      homeGoals = match.homeGoals ?? 0;
-      awayGoals = match.awayGoals ?? 0;
+      homeGoals = parseInt(match.homeGoals) || 0;
+      awayGoals = parseInt(match.awayGoals) || 0;
       status = match.state === 'post' ? 'FINISHED' : 'IN_PLAY';
       minute = match.minute || '';
     }
 
     const currentScore = `${homeGoals}-${awayGoals}`;
+    const currentTotal = homeGoals + awayGoals; // مجموع الأهداف الحالي
     const isLive = status !== 'FINISHED';
 
     if (!trackedMatches[matchId]) {
-      trackedMatches[matchId] = { score: currentScore, status: status, lastUpdated: timestamp };
+      trackedMatches[matchId] = { score: currentScore, total: currentTotal, status: status, lastUpdated: timestamp };
       
-      if (isLive && homeGoals === 0 && awayGoals === 0) {
+      if (isLive && currentTotal === 0) {
         sendTelegramMessage(`🏁 <b>بداية المباراة!</b>\n\n🏆 <b>${homeTeam} vs ${awayTeam}</b>\n\nمشاهدة ممتعة 🍿`);
-        console.log(`[${type}] إشعار بداية: ${homeTeam} ضد ${awayTeam}`);
-      } else {
-        console.log(`[${type}] مراقبة صامتة: ${homeTeam} ${currentScore} ${awayTeam}`);
       }
     } 
     else {
       const prevData = trackedMatches[matchId];
+      const prevTotal = prevData.total ?? (parseInt(prevData.score.split('-')[0]) + parseInt(prevData.score.split('-')[1]));
 
-      if (prevData.score !== currentScore && isLive) {
-        sendTelegramMessage(`⚽ <b>جوووووووول!</b>\n\n⏱️ ${minute}\n🏆 <b>${homeTeam} ${homeGoals} - ${awayGoals} ${awayTeam}</b>`);
-        console.log(`[${type}] رصد هدف: ${homeTeam} ${currentScore} ${awayTeam}`);
+      // 1. لو المجموع زاد = هدف حقيقي
+      if (currentTotal > prevTotal && isLive) {
+        sendTelegramMessage(`⚽ <b>جوووووووول!</b>\n\n⏱️ ${minute}\n🏆 <b>${homeTeam} ${homeGoals} - ${awayGoals} ${awayTeam}</b>${scorerStr}`);
+      }
+      // 2. لو المجموع قل = تدخل الفار وإلغاء هدف
+      else if (currentTotal < prevTotal && isLive) {
+        sendTelegramMessage(`🖥️ <b>تراجع من الـ VAR!</b>\n\nتم إلغاء الهدف لتصبح النتيجة:\n🏆 <b>${homeTeam} ${homeGoals} - ${awayGoals} ${awayTeam}</b>`);
       }
 
       if (prevData.status !== 'FINISHED' && status === 'FINISHED') {
         sendTelegramMessage(`🏁 <b>نهاية المباراة!</b>\n\n🏆 <b>${homeTeam} ${homeGoals} - ${awayGoals} ${awayTeam}</b>\n\nانتهت المواجهة 👏`);
-        console.log(`[${type}] نهاية المباراة: ${homeTeam} ضد ${awayTeam}`);
       }
 
-      // تحديث البيانات والوقت
-      trackedMatches[matchId] = { score: currentScore, status: status, lastUpdated: timestamp };
+      trackedMatches[matchId] = { score: currentScore, total: currentTotal, status: status, lastUpdated: timestamp };
     }
   });
 }
 
 // ==========================================
-// 4. تنظيف الذاكرة (Memory Cleanup) كل 24 ساعة
+// تنظيف الذاكرة كل 24 ساعة
 // ==========================================
 setInterval(() => {
   const now = Date.now();
   const ONE_DAY = 24 * 60 * 60 * 1000;
   Object.keys(trackedMatches).forEach(key => {
-    // لو الماتش عدى عليه 24 ساعة، امسحه من الرامات
     if (now - trackedMatches[key].lastUpdated > ONE_DAY) {
       delete trackedMatches[key];
     }
   });
-  console.log('🧹 تم تنظيف ذاكرة البوت من المباريات القديمة.');
-}, 24 * 60 * 60 * 1000); // يفحص كل 24 ساعة
+}, 24 * 60 * 60 * 1000); 
 
 // ==========================================
-// 3. التنفيذ المتوازي للمحركات (Concurrency)
+// التنفيذ المتوازي
 // ==========================================
 async function runEngines() {
-  // Promise.allSettled يضمن تشغيلهم معاً، وحتى لو واحد فشل التاني يكمل شغل عادي
   await Promise.allSettled([
     checkClubs(),
     checkNational()
   ]);
 }
 
-console.log(`[${new Date().toLocaleTimeString('en-US', {timeZone: 'Africa/Cairo'})}] 🚀 تم تشغيل البوت الشبح المُحصّن...`);
+console.log(`[${new Date().toLocaleString('en-US', {timeZone: 'Africa/Cairo'})}] 🚀 تم تشغيل البوت الشبح المُحصّن ضد الـ VAR...`);
 runEngines(); 
 setInterval(runEngines, 60000);
