@@ -6,7 +6,7 @@ dotenv.config();
 
 // --- سيرفر وهمي لإرضاء Railway ---
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + SofaScore) is Active ⚽')).listen(PORT, () => {
+http.createServer((req, res) => res.end('Hybrid Ghost Bot (FD + ESPN) is Active ⚽')).listen(PORT, () => {
   console.log(`🌐 سيرفر البوت الهجين يعمل بنجاح على بورت ${PORT}`);
 });
 
@@ -25,7 +25,7 @@ const VIP_CLUB_TEAMS = [
 ];
 
 // ==========================================
-// 2. إعدادات محرك المنتخبات (SofaScore الداخلي)
+// 2. إعدادات محرك المنتخبات (ESPN المفتوح)
 // ==========================================
 const VIP_NATIONAL_TEAMS = [
   'Egypt', 'England', 'Portugal', 'Spain', 'Germany', 
@@ -77,30 +77,24 @@ async function checkClubs() {
 
     processMatches(targetMatches, 'club');
   } catch (error) {
-    // تجاهل الأخطاء الصامتة لمحرك الأندية
+    // تجاهل الأخطاء الصامتة
   }
 }
 
 // ==========================================
-// دالة تشغيل محرك المنتخبات (SofaScore الداخلي)
+// دالة تشغيل محرك المنتخبات (ESPN الداخلي)
 // ==========================================
 async function checkNational() {
   try {
-    // تجهيز التاريخ بصيغة YYYY-MM-DD لسيرفر SofaScore
+    // تجهيز التاريخ بصيغة YYYYMMDD لسيرفر ESPN
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${year}-${month}-${day}`;
+    const dateStr = `${year}${month}${day}`;
 
-    const response = await axios.get(`https://api.sofascore.com/api/v1/sport/football/scheduled-events/${dateStr}`, {
-      headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Origin': 'https://www.sofascore.com',
-        'Referer': 'https://www.sofascore.com/',
-        'Accept': '*/*',
-        'Cache-Control': 'no-cache'
-      },
+    // رابط ESPN السري للنتائج الحية لكل مباريات كرة القدم اليوم
+    const response = await axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${dateStr}`, {
       timeout: 8000
     });
 
@@ -108,8 +102,14 @@ async function checkNational() {
     let targetMatches = [];
 
     events.forEach(match => {
-      const h = (match.homeTeam?.name || '').toLowerCase();
-      const a = (match.awayTeam?.name || '').toLowerCase();
+      const competition = match.competitions[0];
+      if (!competition) return;
+
+      const homeTeamData = competition.competitors.find(c => c.homeAway === 'home');
+      const awayTeamData = competition.competitors.find(c => c.homeAway === 'away');
+
+      const h = (homeTeamData?.team?.name || '').toLowerCase();
+      const a = (awayTeamData?.team?.name || '').toLowerCase();
 
       // 1. فلترة الأرجنتين
       const isBanned = BANNED_TEAMS_NAMES.some(b => h.includes(b.toLowerCase()) || a.includes(b.toLowerCase()));
@@ -118,18 +118,25 @@ async function checkNational() {
       // 2. فلترة المنتخبات المفضلة
       const isVip = VIP_NATIONAL_TEAMS.some(v => h.includes(v.toLowerCase()) || a.includes(v.toLowerCase()));
       
-      // 3. التأكد من حالة المباراة في SofaScore
-      const statusType = match.status?.type; // 'notstarted', 'inprogress', 'finished'
+      // 3. التأكد من حالة المباراة في ESPN ('pre', 'in', 'post')
+      const state = match.status?.type?.state; 
 
-      if (isVip && (statusType === 'inprogress' || statusType === 'finished')) {
-        targetMatches.push(match);
+      if (isVip && (state === 'in' || state === 'post')) {
+        targetMatches.push({
+          id: match.id,
+          homeTeam: homeTeamData?.team?.name,
+          awayTeam: awayTeamData?.team?.name,
+          homeGoals: homeTeamData?.score,
+          awayGoals: awayTeamData?.score,
+          state: state,
+          minute: match.status?.displayClock
+        });
       }
     });
 
     processMatches(targetMatches, 'national');
   } catch (error) {
-    const errorMsg = error.response?.status ? `Status ${error.response.status}` : error.message;
-    console.error(`❌ خطأ في محرك SofaScore للمنتخبات: ${errorMsg}`);
+    console.error(`❌ خطأ في محرك ESPN للمنتخبات:`, error.message);
   }
 }
 
@@ -149,19 +156,13 @@ function processMatches(matches, type) {
       status = match.status;
       minute = match.minute ? `${match.minute}'` : (status === 'PAUSED' ? 'HT' : '');
     } else if (type === 'national') {
-      matchId = `SS_${match.id}`;
-      homeTeam = match.homeTeam?.name;
-      awayTeam = match.awayTeam?.name;
-      homeGoals = match.homeScore?.current ?? 0;
-      awayGoals = match.awayScore?.current ?? 0;
-      
-      const typeStatus = match.status?.type;
-      status = typeStatus === 'finished' ? 'FINISHED' : (typeStatus === 'inprogress' ? 'IN_PLAY' : typeStatus);
-      
-      // جلب الدقيقة، وإضافة علامة ' إذا كانت رقماً فقط
-      let minDesc = match.status?.description || '';
-      if (minDesc && !isNaN(minDesc)) minDesc += "'";
-      minute = minDesc;
+      matchId = `ESPN_${match.id}`;
+      homeTeam = match.homeTeam;
+      awayTeam = match.awayTeam;
+      homeGoals = match.homeGoals ?? 0;
+      awayGoals = match.awayGoals ?? 0;
+      status = match.state === 'post' ? 'FINISHED' : 'IN_PLAY';
+      minute = match.minute || '';
     }
 
     const currentScore = `${homeGoals}-${awayGoals}`;
@@ -201,6 +202,6 @@ async function runEngines() {
   await checkNational();
 }
 
-console.log(`[${new Date().toLocaleTimeString()}] 🚀 تم تشغيل البوت الشبح (Football-Data + SofaScore)...`);
+console.log(`[${new Date().toLocaleTimeString()}] 🚀 تم تشغيل البوت الشبح (Football-Data + ESPN)...`);
 runEngines(); 
 setInterval(runEngines, 60000);
